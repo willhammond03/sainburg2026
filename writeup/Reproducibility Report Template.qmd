@@ -3,7 +3,7 @@ title: "Reproducibility Report for Study X by Sample & Sample (20xx, Psychologic
 author: "Reproducibility Project Author[s] (contact information)"
 date: "`r format(Sys.time(), '%B %d, %Y')`"
 format:
-  html:
+  pdf:
     toc: true
     toc_depth: 3
 ---
@@ -14,21 +14,16 @@ format:
 
 [No abstract is needed.]  Each reproducibility project will have a straightforward, no frills report of the study and reproducibility results. These reports will be publicly available as supplementary material for the aggregate report(s) of the project as a whole.  Also, to maximize project integrity, the intro and methods will be written and critiqued in advance of your attempt to reproduce the results. Introductions can be just 1-2 paragraphs clarifying the main idea of the original study, the target finding for your reproducibility attempt, and any other essential information.  It will NOT have a literature review -- that is in the original publication. You can write both the introduction and the methods in past tense.  
 
-**Clarify key analysis of interest here**  You can also pre-specify additional analyses you plan to do.
+Tim Sainburg's 2025 paper includes a breadth of modern techniques and analysis used in the Gentner Lab, making it a useful paper to simulate in order to familiarize myself with pertinent concepts and data. I will be simulating behavioral data from a two-alternative choice task (2AC) where the choices are modulated by the reliablilty of an auditory primer cue. This simulation will peak my interest into sensory systems while allowing me to work with real data and get experience analyzing it. 
 
-### Justification for choice of study
+For this project, I will need to simulate a new data set, clean it to calculate the necessary analytic points (such as change in inflection point), create a linear mixed effects model, and create a 2 distribution histogram (figure 3e in the original paper). I believe that this will be an adequate challenge because it will be a large dataset and I do not have any experience with linear mixed effects models. I will need to ensure that I am cleaning and analyzing such a large dataset accurately and take the necessary steps to understand linear mixed effects models. Although the data is not available in this paper, it is available in another paper (Gorman et al 2026) that analyzes the same dataset, and is available from internal documents in the Gentner lab, making to possible to simulate an accurate representation of the data. 
 
-Please describe why you chose to reproduce the results of this study.
-
-### Anticipated challenges
-
-Do you anticipate running into any challenges when attempting to reproduce these result(s)? If so please, list them here.
 
 ### Links
 
-Project repository (on Github): 
+Project repository (on Github): https://github.com/willhammond03/sainburg2026.git
 
-Original paper (as hosted in your repo): 
+Original paper (as hosted in your repo): https://doi.org/10.1038/s41593-025-01899-1 
 
 ## Methods
 
