@@ -42,7 +42,7 @@ The original study runs these analyses and visualizations in Python, meaning tha
 
 ### Measure of success
 
-I will measure success as the simulated β being within the original confidence interval. 
+I will measure success by comparing the simulated β to the original confidence interval. Additionally, I will analyze the extent to which a shift would occur if the bird was not influenced by the prior cue.  
 
 
 ### Pipeline progress
