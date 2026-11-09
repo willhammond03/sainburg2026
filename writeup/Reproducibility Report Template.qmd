@@ -42,14 +42,14 @@ The original study runs these analyses and visualizations in Python, meaning tha
 
 ### Measure of success
 
-I will measure success by comparing the simulated β to the original confidence interval. Additionally, I will analyze the extent to which a shift would occur if the bird was not influenced by the prior cue.  
+I will measure success by comparing the simulated β to the original confidence interval. Additionally, I will analyze the extent to which a shift could occur if the bird was not influenced by the prior cue.  
 
 
 ### Pipeline progress
 
 Earlier in this report, you described the steps necessary to reproduce the key result(s) of this study. Please describe your progress on each of these steps (e.g., data preprocessing, model fitting, model evaluation).
 
-I have acquired the data files from my lab server and have converted the pickle files to csv format. I am currently figuring out which columns to keep in my data frame so I can reduce their size before I put the csv files in the repository. 
+Right now, I have roughly recreated the 3 figures from the paper I am replicating. I am still working out some differences between the figures in the paper and my replications. I will also need to run a linear mixed effects model to replicate the reported effect size in the paper. After these steps, I will need to create a simulated dataset without the reported main effect to see the differences in the figures and statistics. There is still a lot of work to be done, but having a functioning data pipeline that recreates the targeted figures is a big step forward. 
 
 
 ## Results
@@ -57,23 +57,361 @@ I have acquired the data files from my lab server and have converted the pickle 
 ### Data preparation
 
 Data preparation following the analysis plan.
-	
-```{r include=F}
-### Data Preparation
+
+
+``` {r}
+#cleaning for 20 graph array
 
 #### Load Relevant Libraries and Functions
+library(here)
+library(tidyverse)
 
-#### Import data
+#### Function that cleans one bird's raw file
+clean_bird <- function(path) {
+  bird_id <- tools::file_path_sans_ext(basename(path))
+  
+  d <- read_csv(path, show_col_types = FALSE) |>
+    filter(cueing) |>   # experimental phase only
+    mutate(
+      p_signal_right = case_when(
+        cue_class == "NC"     ~ 0.5,          # no-cue condition
+        cue_direction == "R"  ~ cue_prob,
+        cue_direction == "L"  ~ 1 - cue_prob,
+        TRUE                  ~ NA_real_      # CN (uninformative cue) dropped
+      ),
+      # P(reinforce left | cue)
+      p_signal_left = round(1 - p_signal_right, 3),
+      bird = bird_id
+    ) |>
+    filter(!is.na(p_signal_left), !is.na(response_bool))
+  
+  # Put every morph in the same orientation (flip any morph that falls)
+  x_min  <- min(d$interpolation_point)
+  x_max  <- max(d$interpolation_point)
+  x_span <- x_max - x_min
+  
+  morph_direction <- d |>
+    group_by(interpolation) |>
+    summarise(
+      low_end  = mean(response_bool[interpolation_point <= x_min + x_span * 0.25]),
+      high_end = mean(response_bool[interpolation_point >= x_max - x_span * 0.25]),
+      .groups = "drop"
+    ) |>
+    mutate(flip = low_end > high_end)
+  
+  d |>
+    left_join(select(morph_direction, interpolation, flip), by = "interpolation") |>
+    mutate(
+      interpolation_point = if_else(flip, x_min + x_max - interpolation_point,
+                                    interpolation_point),
+      n_flipped_morphs = sum(morph_direction$flip)
+    ) |>
+    # keep only what the plot needs, so column types match across birds
+    select(bird, interpolation, interpolation_point, cue_class, cue_prob,
+           cue_direction, p_signal_left, response_bool, n_flipped_morphs)
+}
 
-#### Data exclusion / filtering
+#### clean all raw files
+raw_files <- list.files(here("data"), pattern = "^B\\d+\\.csv$", full.names = TRUE)
 
-#### Prepare data for analysis - create columns etc.
+df_all <- map(raw_files, clean_bird, .progress = TRUE) |>
+  list_rbind()
+
+dir.create(here("data", "clean"), showWarnings = FALSE)
+write_csv(df_all, here("data", "clean", "all_birds_clean.csv"))
 ```
 
-### Key analysis
+``` {r}
+# plotting 20 graph array
 
-The analyses as specified in the analysis plan.  
+#### proportion of right pecks per bird, cue condition, and point
+plot_data <- df_all |>
+  group_by(bird, p_signal_left, interpolation_point) |>
+  summarise(
+    p_right  = mean(response_bool),
+    n_trials = n(),
+    .groups  = "drop"
+  )
 
+#### panel order
+bird_order <- c("B1174","B1426","B1170","B1432","B1437",
+                "B1433","B1597","B1427","B1188","B1244",
+                "B1590","B1399","B1591","B1252","B1110",
+                "B1390","B1248","B1593","B1595","B1276")
+
+plot_data <- plot_data |> mutate(bird = factor(bird, levels = bird_order))
+
+#### logistic fit, one fit per bird x cue
+fit_logistic <- function(d) {
+  nls(
+    p_right ~ p_max + (p_min - p_max) / (1 + (interpolation_point / inflection)^slope),
+    data = d,
+    weights = n_trials,
+    start = list(p_min = 0.1, p_max = 0.9, inflection = 64, slope = 10),
+    algorithm = "port",
+    lower = c(p_min = 0,   p_max = 0.5, inflection = 1,   slope = 0.1),
+    upper = c(p_min = 0.5, p_max = 1,   inflection = 128, slope = 100)
+  )
+}
+
+fits <- plot_data |>
+  group_by(bird, p_signal_left) |>
+  nest() |>
+  mutate(model = map(data, possibly(fit_logistic, otherwise = NULL)))
+
+# Which fits failed to converge?
+fits |>
+  filter(map_lgl(model, is.null)) |>
+  select(bird, p_signal_left) |>
+  print(n = Inf)
+
+#### Predicted curves
+x_grid <- seq(min(plot_data$interpolation_point),
+              max(plot_data$interpolation_point),
+              length.out = 200)
+
+curve_data <- fits |>
+  filter(!map_lgl(model, is.null)) |>
+  mutate(pred = map(model, \(m) tibble(
+    interpolation_point = x_grid,
+    p_right = predict(m, newdata = tibble(interpolation_point = x_grid))
+  ))) |>
+  select(bird, p_signal_left, pred) |>
+  unnest(pred)
+
+#### colors
+cue_colors <- c("0.125" = "#7b1e4a", "0.25" = "#c0447f", "0.5" = "gray40",
+                "0.75" = "#6a5acd", "0.875" = "#2b2a73")
+
+#### plot
+ggplot(plot_data, aes(x = interpolation_point, y = p_right,
+                           color = factor(p_signal_left))) +
+  geom_point(size = 0.6, alpha = 0.4) +
+  geom_line(data = curve_data, linewidth = 0.6) +
+  facet_wrap(~ bird, ncol = 5) +
+  scale_color_manual(values = cue_colors) +
+  scale_y_continuous(limits = c(0, 1), breaks = c(0, 1)) +
+  labs(x = "Syllable continuum (interpolation point)",
+       y = "P(peck right)",
+       color = "P(reinforce left | cue)") +
+  theme_classic() +
+  theme(strip.background = element_blank(),
+        strip.text = element_text(face = "bold"))
+
+```
+
+``` {r}
+# fig 3e cleaning
+
+df_all <- read_csv(here("data", "clean", "all_birds_clean.csv"), show_col_types = FALSE)
+
+#### Keep the two strongest cues, informative trials only (L or R direction)
+cued <- df_all |>
+  filter(cue_prob %in% c(0.75, 0.875), cue_direction %in% c("L", "R"))
+
+#### Proportion of right pecks per bird, morph, cue strength, cue direction, and point
+# Assumes the `interpolation` column identifies the morph
+cue_summary <- cued |>
+  group_by(bird, interpolation, cue_prob, cue_direction, interpolation_point) |>
+  summarise(
+    p_right  = mean(response_bool),
+    n_trials = n(),
+    .groups  = "drop"
+  )
+
+#### Four-parameter logistic
+fit_logistic <- function(d) {
+  nls(
+    p_right ~ p_max + (p_min - p_max) / (1 + (interpolation_point / inflection)^slope),
+    data = d,
+    weights = n_trials,
+    start = list(p_min = 0.1, p_max = 0.9, inflection = 64, slope = 10),
+    algorithm = "port",
+    lower = c(p_min = 0,   p_max = 0.5, inflection = 1,   slope = 0.1),
+    upper = c(p_min = 0.5, p_max = 1,   inflection = 128, slope = 100)
+  )
+}
+
+#### One fit per bird x morph x cue strength x cue direction
+fits <- cue_summary |>
+  group_by(bird, interpolation, cue_prob, cue_direction) |>
+  nest() |>
+  mutate(
+    model = map(data, \(d) suppressWarnings(possibly(fit_logistic, otherwise = NULL)(d))),
+    inflection = map_dbl(model, \(m) if (is.null(m)) NA_real_ else coef(m)[["inflection"]])
+  ) |>
+  ungroup()
+
+#### Fit quality: how many failed or landed on a bound?
+fits |>
+  summarise(
+    n_fits     = n(),
+    n_failed   = sum(is.na(inflection)),
+    n_at_bound = sum(inflection <= 1.5 | inflection >= 127.5, na.rm = TRUE)
+  ) |>
+  print()
+
+#### ΔInflection = left-cue inflection minus right-cue inflection
+delta <- fits |>
+  filter(!is.na(inflection), inflection > 1.5, inflection < 127.5) |>   # drop failed / at-bound fits
+  select(bird, interpolation, cue_prob, cue_direction, inflection) |>
+  pivot_wider(names_from = cue_direction, values_from = inflection) |>
+  drop_na(L, R) |>
+  mutate(delta_inflection = L - R)
+
+#### Checks
+delta |> count(cue_prob)  
+delta |>
+  group_by(cue_prob) |>
+  summarise(mean_delta = mean(delta_inflection),
+            sd_delta   = sd(delta_inflection))   # means should be POSITIVE
+
+write_csv(delta, here("data", "clean", "delta_inflection.csv"))
+
+```
+
+``` {r}
+#fig 3e plot
+
+binwidth <- 1
+
+ggplot(delta, aes(x = delta_inflection,
+                       fill = factor(cue_prob),
+                       color = factor(cue_prob))) +
+  # y is the proportion of fits in each bin, within each cue strength
+  geom_histogram(aes(y = after_stat(density) * binwidth),
+                 binwidth = binwidth, position = "identity",
+                 alpha = 0.5, color = NA) +
+  geom_density(aes(y = after_stat(density) * binwidth),
+               fill = NA, linewidth = 0.8, adjust=2) +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  scale_fill_manual(values  = c("0.75" = "gray70", "0.875" = "gray30")) +
+  scale_color_manual(values = c("0.75" = "gray70", "0.875" = "gray30")) +
+  coord_cartesian(xlim = c(-20, 20)) +
+  labs(x = "ΔInflection",
+       y = "Probability",
+       fill = "P(side)", color = "P(side)") +
+  theme_classic()
+
+```
+
+```{r}
+# fig 3f cleaning
+
+#### Proportion of right pecks per bird, morph, cue condition, and point
+# Assumes the `interpolation` column identifies the morph
+cond_summary <- df_all |>
+  group_by(bird, interpolation, p_signal_left, interpolation_point) |>
+  summarise(
+    p_right  = mean(response_bool),
+    n_trials = n(),
+    .groups  = "drop"
+  )
+
+#### Four-parameter logistic
+fit_logistic <- function(d) {
+  nls(
+    p_right ~ p_max + (p_min - p_max) / (1 + (interpolation_point / inflection)^slope),
+    data = d,
+    weights = n_trials,
+    start = list(p_min = 0.1, p_max = 0.9, inflection = 64, slope = 10),
+    algorithm = "port",
+    lower = c(p_min = 0,   p_max = 0.5, inflection = 1,   slope = 0.1),
+    upper = c(p_min = 0.5, p_max = 1,   inflection = 128, slope = 100)
+  )
+}
+
+#### One fit per bird x morph x cue condition
+fits <- cond_summary |>
+  group_by(bird, interpolation, p_signal_left) |>
+  nest() |>
+  mutate(
+    model = map(data, \(d) suppressWarnings(possibly(fit_logistic, otherwise = NULL)(d))),
+    inflection = map_dbl(model, \(m) if (is.null(m)) NA_real_ else coef(m)[["inflection"]])
+  ) |>
+  ungroup()
+
+#### Fit quality: how many failed or landed on a bound?
+fits |>
+  summarise(
+    n_fits     = n(),
+    n_failed   = sum(is.na(inflection)),
+    n_at_bound = sum(inflection <= 1.5 | inflection >= 127.5, na.rm = TRUE)
+  ) |>
+  print()
+
+#### Keep good fits only
+fits_clean <- fits |>
+  filter(!is.na(inflection), inflection > 1.5, inflection < 127.5) |>
+  select(bird, interpolation, p_signal_left, inflection)
+
+#### Checks
+nrow(fits_clean)                # the paper reports n = 1,050
+fits_clean |> count(p_signal_left)
+fits_clean |>
+  group_by(p_signal_left) |>
+  summarise(mean_inflection = mean(inflection))   # should INCREASE with p_signal_left
+
+write_csv(fits_clean, here("data", "clean", "inflection_by_cue.csv"))
+
+```
+
+``` {r}
+# 3f plot
+
+cue_colors <- c("0.125" = "#7b1e4a", "0.25" = "#c0447f", "0.5" = "gray40",
+                "0.75" = "#6a5acd", "0.875" = "#2b2a73")
+
+#### Bird-level means (the colored triangles): average over each bird's morphs
+bird_means <- fits_clean |>
+  group_by(bird, p_signal_left) |>
+  summarise(inflection = mean(inflection), .groups = "drop")
+
+#### Across-bird means with s.e.m. (the black triangles and error bars)
+cue_means <- bird_means |>
+  group_by(p_signal_left) |>
+  summarise(
+    mean_inflection = mean(inflection),
+    sem = sd(inflection) / sqrt(n()),
+    .groups = "drop"
+  )
+
+#### Correlation statistics for the annotation (Pearson, over all morph-level fits)
+ct <- cor.test(fits_clean$p_signal_left, fits_clean$inflection)
+stat_label <- sprintf("r² = %.3f\nP = %.1e", ct$estimate^2, ct$p.value)
+
+#### Plot
+ggplot() +
+  # each morph for each bird
+  geom_jitter(data = fits_clean,
+              aes(x = p_signal_left, y = inflection, color = factor(p_signal_left)),
+              width = 0.02, height = 0, size = 1, alpha = 0.3) +
+  # each bird, averaged over morphs
+  geom_point(data = bird_means,
+             aes(x = p_signal_left, y = inflection, color = factor(p_signal_left)),
+             shape = 17, size = 2.5, alpha = 0.8,
+             position = position_jitter(width = 0.02, height = 0)) +
+  # empirical regression line
+  geom_smooth(data = fits_clean,
+              aes(x = p_signal_left, y = inflection),
+              method = "lm", se = FALSE,
+              color = "black", linetype = "dashed", linewidth = 0.8) +
+  # across-bird means with s.e.m.
+  geom_errorbar(data = cue_means,
+                aes(x = p_signal_left,
+                    ymin = mean_inflection - sem, ymax = mean_inflection + sem),
+                width = 0.03, color = "black") +
+  geom_point(data = cue_means,
+             aes(x = p_signal_left, y = mean_inflection),
+             shape = 17, size = 3.5, color = "black") +
+  annotate("text", x = 0.08, y = Inf, label = stat_label,
+           hjust = 0, vjust = 1.3, size = 4) +
+  scale_color_manual(values = cue_colors, guide = "none") +
+  coord_cartesian(xlim = c(0.05, 0.95)) +
+  labs(x = "P(reinforce left | cue)", y = "Inflection") +
+  theme_classic()
+
+```
 *Side-by-side graph with original graph is ideal here*
 
 ### Exploratory analyses
