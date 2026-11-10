@@ -60,7 +60,7 @@ Data preparation following the analysis plan.
 
 
 ``` {r}
-#cleaning for 20 graph array
+#cleaning for fig 3b
 
 #### Load Relevant Libraries and Functions
 library(here)
@@ -68,7 +68,7 @@ library(tidyverse)
 
 #### Function that cleans one bird's raw file
 clean_bird <- function(path) {
-  bird_id <- tools::file_path_sans_ext(basename(path))
+  bird_id <- sub("\\.csv(\\.gz)?$", "", basename(path))
   
   d <- read_csv(path, show_col_types = FALSE) |>
     filter(cueing) |>   # experimental phase only
@@ -112,13 +112,13 @@ clean_bird <- function(path) {
 }
 
 #### clean all raw files
-raw_files <- list.files(here("data"), pattern = "^B\\d+\\.csv$", full.names = TRUE)
+raw_files <- list.files(here("data"), pattern = "^B\\d+\\.csv(\\.gz)?$", full.names = TRUE)
 
 df_all <- map(raw_files, clean_bird, .progress = TRUE) |>
   list_rbind()
 
 dir.create(here("data", "clean"), showWarnings = FALSE)
-write_csv(df_all, here("data", "clean", "all_birds_clean.csv"))
+write_csv(df_all, here("data", "clean", "all_birds_clean.csv.gz"))
 ```
 
 ``` {r}
@@ -203,7 +203,7 @@ ggplot(plot_data, aes(x = interpolation_point, y = p_right,
 ``` {r}
 # fig 3e cleaning
 
-df_all <- read_csv(here("data", "clean", "all_birds_clean.csv"), show_col_types = FALSE)
+df_all <- read_csv(here("data", "clean", "all_birds_clean.csv.gz"), show_col_types = FALSE)
 
 #### Keep the two strongest cues, informative trials only (L or R direction)
 cued <- df_all |>
