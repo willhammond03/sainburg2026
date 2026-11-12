@@ -65,6 +65,7 @@ Data preparation following the analysis plan.
 #### Load Relevant Libraries and Functions
 library(here)
 library(tidyverse)
+library(lme4)
 
 #### Function that cleans one bird's raw file
 clean_bird <- function(path) {
@@ -75,9 +76,10 @@ clean_bird <- function(path) {
     mutate(
       p_signal_right = case_when(
         cue_class == "NC"     ~ 0.5,          # no-cue condition
+        cue_class == "CN"     ~ 0.5,          # uninformative cue
         cue_direction == "R"  ~ cue_prob,
         cue_direction == "L"  ~ 1 - cue_prob,
-        TRUE                  ~ NA_real_      # CN (uninformative cue) dropped
+        TRUE                  ~ NA_real_      
       ),
       # P(reinforce left | cue)
       p_signal_left = round(1 - p_signal_right, 3),
@@ -122,7 +124,7 @@ write_csv(df_all, here("data", "clean", "all_birds_clean.csv.gz"))
 ```
 
 ``` {r}
-# plotting 20 graph array
+# plotting fig 3b
 
 #### proportion of right pecks per bird, cue condition, and point
 plot_data <- df_all |>
@@ -301,7 +303,7 @@ ggplot(delta, aes(x = delta_inflection,
 #### Proportion of right pecks per bird, morph, cue condition, and point
 # Assumes the `interpolation` column identifies the morph
 cond_summary <- df_all |>
-  group_by(bird, interpolation, p_signal_left, interpolation_point) |>
+  group_by(bird, interpolation, p_signal_left, cue_class, interpolation_point) |>
   summarise(
     p_right  = mean(response_bool),
     n_trials = n(),
@@ -323,7 +325,7 @@ fit_logistic <- function(d) {
 
 #### One fit per bird x morph x cue condition
 fits <- cond_summary |>
-  group_by(bird, interpolation, p_signal_left) |>
+  group_by(bird, interpolation, p_signal_left, cue_class) |>
   nest() |>
   mutate(
     model = map(data, \(d) suppressWarnings(possibly(fit_logistic, otherwise = NULL)(d))),
@@ -343,7 +345,8 @@ fits |>
 #### Keep good fits only
 fits_clean <- fits |>
   filter(!is.na(inflection), inflection > 1.5, inflection < 127.5) |>
-  select(bird, interpolation, p_signal_left, inflection)
+  select(bird, interpolation, p_signal_left, cue_class, inflection) |>
+  mutate(p_signal_right = 1 - p_signal_left) #fix sign for effect
 
 #### Checks
 nrow(fits_clean)                # the paper reports n = 1,050
@@ -410,6 +413,15 @@ ggplot() +
   coord_cartesian(xlim = c(0.05, 0.95)) +
   labs(x = "P(reinforce left | cue)", y = "Inflection") +
   theme_classic()
+
+```
+```{r}
+# linear mixed effects model
+lmer(inflection ~ p_signal_right + (p_signal_right | bird), data = fits_clean)
+```
+
+```{r}
+# data simulation
 
 ```
 *Side-by-side graph with original graph is ideal here*
